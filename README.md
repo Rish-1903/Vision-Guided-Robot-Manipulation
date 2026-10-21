@@ -26,7 +26,7 @@ flowchart TD
 | Task 5 | Estimate 3D positions and yaw from RGB-D | Object SE(3) poses and translation/rotation errors |
 | Task 6 | Manipulate objects using estimated poses | IK preflight, grasp-proxy demonstration, placement metrics |
 
-Task 1's design rationale is in [`TASK1_DESIGN.md`](TASK1_DESIGN.md).
+Task 1's design rationale is in [`LiteratureReview.md`](LiteratureReview.md).
 
 ## Requirements
 
@@ -78,7 +78,7 @@ python run_pipeline.py --mode runtime \
   --destinations config/destinations.json \
   --tcp-verified --execute
 ```
-![Alt text]('assets/video.mp4')
+![Alt text](assets/video.mp4)
 **Important:** The example placement goals in `config/destinations.json` may need to be changed for your workcell. Passing IK checks for individual waypoints **does not** establish that transitions are collision-free. The controller uses fresh RGB-D observations before every pick.
 
 ## Modes
