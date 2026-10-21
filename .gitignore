@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Run outputs (large; summaries are copied into results/ by tools/collect_results.py)
+runs/
+latest_calibration.json
+stages/task2/dataset/
+stages/task2/render_checks/
+stages/task2/selftest_results.json
+*.ttt
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

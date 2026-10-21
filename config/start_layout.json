@@ -1,0 +1,6 @@
+{
+  "_comment": "Scene STAGING only (world x, y, z, yaw_deg). Never passed to perception or planning.",
+  "red":   [0.190,  0.063, 0.052,   0.0],
+  "green": [0.015,  0.063, 0.052,  35.0],
+  "blue":  [0.115, -0.175, 0.052, -35.0]
+}
