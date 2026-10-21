@@ -79,6 +79,8 @@ python run_pipeline.py --mode runtime \
   --tcp-verified --execute
 ```
 ![Alt text](assets/output.gif)
+
+
 **Important:** The example placement goals in `config/destinations.json` may need to be changed for your workcell. Passing IK checks for individual waypoints **does not** establish that transitions are collision-free. The controller uses fresh RGB-D observations before every pick.
 
 ## Modes
