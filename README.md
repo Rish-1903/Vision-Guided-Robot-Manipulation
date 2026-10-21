@@ -2,9 +2,7 @@
 
 **RGB-D perception and sequential pick-and-place with a 7-DOF Franka Emika Panda.**
 
-This research/coursework prototype integrates camera calibration, eye-to-hand calibration, color-based localization, cuboid pose estimation, inverse kinematics, and sequential robot manipulation in one Python/CoppeliaSim pipeline.
-
-> **Implementation status:** This repository is prepared from the **last available V4 source snapshot**. If you have a newer working version on your Mac, publish **that version** instead and copy these documentation files into it. Passing the local offline tests is not proof of end-to-end simulator execution. The kinematic grasp is a *proxy*, not a physical gripper contact simulation.
+This prototype integrates camera calibration, eye-to-hand calibration, color-based localization, cuboid pose estimation, inverse kinematics, and sequential robot manipulation in one Python/CoppeliaSim pipeline.
 
 ## Pipeline
 
