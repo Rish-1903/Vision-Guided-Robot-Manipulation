@@ -131,6 +131,4 @@ Test results from a previous CoppeliaSim run included 90/90 RGB detections, 90/9
 
 See [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 
-## Attribution and licensing
 
-The Franka model and CoppeliaSim are third-party assets that are **not bundled here**. Review third-party source headers and dependencies before selecting a project license. No license is asserted by this template.
