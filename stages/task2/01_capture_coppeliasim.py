@@ -3,7 +3,7 @@
 Instructions:
   - Open CoppeliaSim with a NEW EMPTY scene and the ZMQ Remote API add-on enabled.
   - Do NOT start the simulation yourself; the script starts/stops it in stepping mode.
-  - Run: python 01_capture_coppeliasim.py --views 30
+  - Run: python 01_capture_coppeliasim.py --views 30 [--profile wide|repo]
 
 The code estimates NO intrinsic parameters and does not read the camera's ground-truth
 pose or intrinsics for calibration. The known nominal field of view is saved only for
@@ -19,9 +19,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from _corner_utils import detect_corners
+from pose_profiles import PROFILES
 from make_checkerboard import (
     INNER_CORNERS,
     SQUARE_METERS,
@@ -82,28 +82,18 @@ def create_workcell(sim, texture_file: Path):
     return camera, board
 
 
-def pose_for_attempt(rng: np.random.Generator, attempt: int) -> list[float]:
-    if attempt == 0:
-        # First observation should be easy to recognize.
-        return [0.0, 0.0, 0.07, 0.0, 0.0, 0.0, 1.0]
-    xyz = [
-        float(rng.uniform(-0.16, 0.16)),
-        float(rng.uniform(-0.11, 0.11)),
-        float(rng.uniform(0.02, 0.14)),
-    ]
-    roll_pitch_yaw = [
-        float(rng.uniform(-27, 27)),
-        float(rng.uniform(-27, 27)),
-        float(rng.uniform(-32, 32)),
-    ]
-    xyzw = Rotation.from_euler('xyz', roll_pitch_yaw, degrees=True).as_quat().tolist()
-    return xyz + xyzw
+def pose_for_attempt(rng: np.random.Generator, attempt: int, profile: str = 'wide') -> list[float]:
+    """Board pose for one capture attempt; see pose_profiles.py for the profiles."""
+    return PROFILES[profile](rng, attempt)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--views', type=int, default=30)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--profile', choices=list(PROFILES), default='wide',
+                        help="'wide' (default): 25-55 deg tilts, 0.45-0.95 m depth. "
+                             "'repo': the original <=27 deg, ~0.9 m profile")
     parser.add_argument('--output', type=Path, default=ROOT / 'dataset')
     args = parser.parse_args()
     if args.views < 15:
@@ -146,7 +136,7 @@ def main():
         for attempt in range(max(100, args.views * 6)):
             if len(saved) >= args.views:
                 break
-            pose = pose_for_attempt(rng, attempt)
+            pose = pose_for_attempt(rng, attempt, args.profile)
             sim.setObjectPose(board, pose)
             sim.step()
             sim.step()
@@ -173,6 +163,7 @@ def main():
         'nominal_field_of_view_deg_for_validation_only': CAMERA_FOV_DEG,
         'internal_corners': list(INNER_CORNERS),
         'square_size_m': SQUARE_METERS,
+        'pose_profile': args.profile,
         'board_generation_poses_not_for_calibration': saved,
     }
     with (dest / 'manifest.json').open('w') as f:

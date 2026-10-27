@@ -21,7 +21,6 @@ import sys
 from datetime import datetime
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 ROOT = Path(__file__).resolve().parent
 S2 = ROOT / 'stages' / 'task2'
@@ -29,21 +28,13 @@ S3 = ROOT / 'stages' / 'task3'
 S4 = ROOT / 'stages' / 'task4'
 S5 = ROOT / 'stages' / 'task5'
 S6 = ROOT / 'stages' / 'task6'
+sys.path.insert(0, str(ROOT))
 
-# Known, camera-visible, reachability-tested INITIALIZATION positions for this
-# user's scene. They are NOT passed to pose estimation or grasp planning.
-START_WORLD = {
-    'red':   (0.190,  0.063, 0.052,   0.0),
-    'green': (0.015,  0.063, 0.052,  35.0),
-    'blue':  (0.115, -0.175, 0.052, -35.0),
-}
-# The RED goal has been IK preflighted by the user. Other goals are PROPOSED
-# candidates, requiring fresh IK preflight before any execution.
-DEST_WORLD = {
-    'red':   (0.2775, -0.1500, 0.0520),
-    'green': (0.2775,  0.0150, 0.0520),
-    'blue':  (0.2775, 0.1500, 0.0520),
-}
+from vgm.config import (latest_calibration, load_destinations,  # noqa: E402
+                        load_start_layout, validate_layout)
+from vgm.geometry import obj_pose_matrix, yaw_of  # noqa: E402
+from vgm.manipulation import (DEFAULT_XY_TOL_MM, DEFAULT_YAW_TOL_DEG,  # noqa: E402
+                              DEFAULT_Z_TOL_MM)
 
 
 def dump_json(path: Path, value):
@@ -72,20 +63,8 @@ def call_stage(name: str, argv: list[str], output_dir: Path, pipeline):
 
 
 def default_existing_calibration() -> Path:
-    """Reuse only calibration from this self-contained project, never old tasks."""
-    pointer = ROOT/'latest_calibration.json'
-    if pointer.is_file():
-        try:
-            path=Path(json.loads(pointer.read_text())['calibration_file'])
-            if path.is_file(): return path
-        except (ValueError,KeyError,TypeError):
-            pass
-    candidates=sorted((ROOT/'runs').glob('*/task3/recovered/camera_to_robot_transform_recovered.npz'),
-                      key=lambda f:f.stat().st_mtime,reverse=True)
-    if candidates: return candidates[0]
-    raise FileNotFoundError('No calibration from THIS pipeline was found. Run '
-        '--mode fresh first, or supply --calibration /absolute/path/to/'
-        'camera_to_robot_transform_recovered.npz.')
+    """Reuse only calibration produced by this project."""
+    return latest_calibration()
 
 
 def validate_calibration(file: Path):
@@ -111,7 +90,6 @@ def assert_calibration_matches_scene(sim, base, camera, calibration: Path):
     or controller operation; only to reject an incorrect scene/calibration.
     """
     from scipy.spatial.transform import Rotation as R
-    from task4_common import obj_pose_matrix
     with np.load(calibration) as npz:
         est=np.asarray(npz['B_from_Ccv'],float)
     sim_pose=obj_pose_matrix(sim.getObjectPose(camera,base))
@@ -196,44 +174,13 @@ def run_offline_evaluations(args, output, calibration, pipeline):
         output/'task5', pipeline)
 
 
-def validate_layout(sources: dict, dests: dict, selected: list[str], min_dist=0.110):
-    """Detect clear block overlaps at each STEP; does NOT certify robot collision safety."""
-    current = {name:np.asarray(sources[name][:2],float) for name in ('red','green','blue')}
-    for color in selected:
-        target = np.asarray(dests[color][:2],float)
-        if abs(float(target[0])) > 0.32 or abs(float(target[1])) > 0.26:
-            raise ValueError(f'{color} placement lies outside workcell tabletop: {target}')
-        for other, xy in current.items():
-            if other == color: continue  # picked block has left its source position
-            d = float(np.linalg.norm(target-xy))
-            if d < min_dist:
-                raise ValueError(f'{color} placement is only {d:.3f}m from {other}. '
-                                 'Move its goal in config/destinations.json.')
-        current[color] = target  # its previous source is now free
-
-
-def load_destinations(path: Path | None):
-    all_dest = dict(DEST_WORLD)
-    if path is not None:
-        obj = json.loads(path.read_text())
-        for color, coords in obj.items():
-            if color not in all_dest or len(coords) != 3:
-                raise ValueError(f'Expected red/green/blue -> [world_x,world_y,world_z], got {color}: {coords}')
-            all_dest[color] = tuple(map(float, coords))
-    return all_dest
-
-
 def run_live_sequence(args, output: Path, calibration: Path, pipeline):
-    # Place the Task4 and Task5 modules ahead of the Task6 directory to import
-    # ONLY the reviewed, packaged estimator source without depending on local files.
-    sys.path.insert(0, str(S6))
     from coppeliasim_zmqremoteapi_client import RemoteAPIClient
-    from task4_common import (COLORS, prepare_scene, load_calibration,
-                              detect_from_rgb, read_bgr, obj_pose_matrix)
-    from task5_common import read_depth_m, estimate_pose_from_mask
-    from task6_pick_place_fixed import (IKMotion, chain_joints, find_tip, live_poses,
-                                      known_place_B, make_tcp_goal, way_above,
-                                      evaluate_object)
+    from vgm.manipulation import (IKMotion, chain_joints, evaluate_object, find_tip,
+                                  live_poses)
+    from vgm.geometry import make_tcp_goal, way_above
+    from vgm.perception import detect_from_rgb, load_calibration
+    from vgm.scene import prepare_scene, read_bgr, set_block_world, world_to_base
 
     k, dist, B_C = load_calibration(calibration)
     client = RemoteAPIClient()
@@ -261,11 +208,12 @@ def run_live_sequence(args, output: Path, calibration: Path, pipeline):
     print('GRASP MODE: kinematic attachment proxy. No contact/force validation.')
     objects = prepare_scene(sim)
     destinations = load_destinations(args.destinations)
+    start_layout = load_start_layout()
     colors = args.colors
     print('SEQUENTIAL PICK ORDER:', ' -> '.join(colors))
     print('INDIVIDUAL DESTINATIONS (WORLD m):', {c:destinations[c] for c in colors})
     if not args.keep_layout:
-        validate_layout(START_WORLD, destinations, colors)
+        validate_layout(start_layout, destinations, colors)
     else:
         print('WARNING: --keep-layout skips known-layout clearance check; inspect scene for occupied destinations.')
 
@@ -273,9 +221,8 @@ def run_live_sequence(args, output: Path, calibration: Path, pipeline):
     # are not ever read/used as pick estimates: each pick is fresh RGB-D.
     if not args.keep_layout:
         for name, h in objects.items():
-            x,y,z,yaw = START_WORLD[name]
-            q = Rotation.from_euler('z',yaw,degrees=True).as_quat()
-            sim.setObjectPose(h,[float(x),float(y),float(z),*q.tolist()], -1)
+            x,y,z,yaw = start_layout[name]
+            set_block_world(sim, h, x, y, yaw, z=z)
         print('Initialized camera-visible source layout (scene setup ONLY).')
     else:
         print('Preserving object positions from existing stopped scene.')
@@ -317,9 +264,9 @@ def run_live_sequence(args, output: Path, calibration: Path, pipeline):
         # FIRST preflight ALL requested colors, before any joint motion.
         for color in colors:
             pose=initial[color]
-            yaw=math.atan2(float(pose[1,0]),float(pose[0,0]))
+            yaw=yaw_of(pose)
             center=pose[:3,3]
-            place_B=known_place_B(sim,base,destinations[color])
+            place_B=world_to_base(sim,base,destinations[color])
             grasp=make_tcp_goal(center,yaw,args.tcp_height)
             above_pick=way_above(grasp,args.lift_height)
             place=make_tcp_goal(place_B,yaw,args.tcp_height)
@@ -361,9 +308,9 @@ def run_live_sequence(args, output: Path, calibration: Path, pipeline):
             est=measured[color]
             if est is None:
                 raise RuntimeError(f'{color} RGB-D perception failed: {diag[color]}')
-            yaw=math.atan2(float(est[1,0]),float(est[0,0]))
+            yaw=yaw_of(est)
             pick_center=est[:3,3].copy()
-            place_center=known_place_B(sim,base,destinations[color])
+            place_center=world_to_base(sim,base,destinations[color])
             grasp=make_tcp_goal(pick_center,yaw,args.tcp_height)
             above_pick=way_above(grasp,args.lift_height)
             place=make_tcp_goal(place_center,yaw,args.tcp_height)
@@ -383,8 +330,9 @@ def run_live_sequence(args, output: Path, calibration: Path, pipeline):
             motion.move(place,'release '+color)
             sim.setObjectParent(objects[color],-1,True)
             for _ in range(4): sim.step()
-            record.update(evaluate_object(sim,objects[color],base,place_center,est))
-            record['success']=bool(record['placement_success_30mm_xy_20mm_z'])
+            record.update(evaluate_object(sim,objects[color],base,place_center,None,
+                                          xy_tol_mm=args.xy_tol_mm,z_tol_mm=args.z_tol_mm,
+                                          yaw_tol_deg=args.yaw_tol_deg))
             record['status']='executed'
             dump_json(trialdir/'trial_result.json',record)
             motion.move(above_place,'retreat '+color)
@@ -419,6 +367,9 @@ def run_live_sequence(args, output: Path, calibration: Path, pipeline):
                 'n_successful':sum(bool(r.get('success')) for r in records),
                 'success_rate':sum(bool(r.get('success')) for r in records)/len(records),
                 'grasp_mode':'kinematic_parenting_proxy',
+                'tolerances':{'xy_mm':args.xy_tol_mm,'z_mm':args.z_tol_mm,'yaw_deg':args.yaw_tol_deg},
+                'note':'One sequence is a demonstration, not a success rate. '
+                       'Use --benchmark-trials or stages/task6/task6_benchmark.py.',
             })
         pipeline['stages'].append({'name':'Task 6 — continuous simulated pick/place',
                                    'status':pipeline.get('runtime_status'),
@@ -452,13 +403,21 @@ def main():
     p.add_argument('--colors',nargs='+',choices=['red','green','blue'],default=['red'],
                    help='Color order, e.g. --colors red green blue performs sequential picks')
     p.add_argument('--destinations',type=Path,default=None,
-                   help='Optional JSON file mapping colors to WORLD XYZ placement centers')
+                   help='JSON mapping colors to WORLD XYZ placement centres (default: config/destinations.json)')
     p.add_argument('--keep-layout',action='store_true',
                    help='Keep current stopped-scene block poses, instead of staging known initial locations')
     p.add_argument('--tcp-height',type=float,default=.09)
     p.add_argument('--lift-height',type=float,default=.18)
     p.add_argument('--execute',action='store_true',
                    help='Explicitly enable joint motion and kinematic grasp proxy; default only checks IK')
+    p.add_argument('--xy-tol-mm',type=float,default=DEFAULT_XY_TOL_MM,help='Placement success: XY tolerance')
+    p.add_argument('--z-tol-mm',type=float,default=DEFAULT_Z_TOL_MM,help='Placement success: Z tolerance')
+    p.add_argument('--yaw-tol-deg',type=float,default=DEFAULT_YAW_TOL_DEG,
+                   help='Placement success: yaw tolerance (only when a target yaw is given)')
+    p.add_argument('--benchmark-trials',type=int,default=0,
+                   help='After the live sequence, run N randomized Task 6 benchmark trials (requires --execute)')
+    p.add_argument('--benchmark-closed-loop',action='store_true',
+                   help='Benchmark also runs the look-then-move visual-servo correction (bonus)')
     p.add_argument('--output',type=Path,default=ROOT/'runs')
     args=p.parse_args()
     if len(set(args.colors))!=len(args.colors): p.error('Do not repeat colors')
@@ -474,12 +433,12 @@ def main():
     out.mkdir(parents=True,exist_ok=False)
     pipeline={'pipeline_version':'4.0-physics-disabled-kinematic-proxy-tricolor',
               'mode':args.mode, 'execution_requested':bool(args.execute),
-              'task1':'Engineering decisions and literature in TASK1_DESIGN.md',
+              'task1':'Literature review and technical selection in LiteratureReview.md',
               'grasp_mode':'kinematic_parenting_proxy',
               'all_objects_true_poses_used_for_planning':False,
               'calibration_policy':'estimated matrices from images/landmarks; simulator ground truth for evaluation only',
               'stages':[], 'manifest_path':out/'pipeline_manifest.json'}
-    pipeline['stages'].append({'name':'Task 1 — design and literature','status':'documented','file':str(ROOT/'TASK1_DESIGN.md')})
+    pipeline['stages'].append({'name':'Task 1 — design and literature','status':'documented','file':str(ROOT/'LiteratureReview.md')})
     dump_json(pipeline['manifest_path'],{k:v for k,v in pipeline.items() if k!='manifest_path'})
     try:
         if args.mode == 'fresh':
@@ -529,6 +488,17 @@ def main():
         if args.mode in ('fresh','full','reuse'):
             run_offline_evaluations(args,out,cal,pipeline)
         run_live_sequence(args,out,cal,pipeline)
+        if args.benchmark_trials and args.execute:
+            argv=[S6/'task6_benchmark.py','--camera',args.camera,'--robot-base',args.robot_base,
+                  '--calibration',cal,'--trials',args.benchmark_trials,'--tcp-verified',
+                  '--xy-tol-mm',args.xy_tol_mm,'--z-tol-mm',args.z_tol_mm,'--yaw-tol-deg',args.yaw_tol_deg,
+                  '--output',out/'task6_benchmark']
+            if args.tip: argv+=['--tip',args.tip]
+            if args.destinations: argv+=['--destinations',args.destinations]
+            if args.benchmark_closed_loop: argv+=['--closed-loop']
+            call_stage('Task 6 — randomized multi-trial benchmark',argv,out/'task6_benchmark',pipeline)
+        elif args.benchmark_trials:
+            print('NOTE: --benchmark-trials ignored without --execute.')
         print(f'\nPIPELINE COMPLETE. Results: {out}')
     except Exception as exc:
         pipeline['pipeline_error']=str(exc)
